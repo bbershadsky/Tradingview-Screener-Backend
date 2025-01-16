@@ -1,12 +1,30 @@
-import streamlit as st
+from flask import Flask, request, jsonify
 import pandas as pd
+import json
+
+# tradingview_screener library
 from tradingview_screener import Query, col
 
-def run_query(min_volume, max_market_cap, min_perf_ytd):
+app = Flask(__name__)
+
+@app.route("/tradingview", methods=["POST"])
+def tradingview_data():
     """
-    Execute the TradingView Screener query with dynamically supplied parameters.
+    A Flask endpoint that:
+      1. Receives POST parameters to filter the query.
+      2. Runs the TradingView screener with those parameters.
+      3. Converts results to JSON (multi-line).
+      4. Removes lines 2–6 and the last 2 lines (1-based indexing).
+      5. Returns the cleaned JSON object.
     """
-    query = (
+    # Get POST data; if not provided, use defaults
+    data = request.get_json(silent=True) or {}
+    min_volume = data.get("min_volume", 500000)
+    max_market_cap = data.get("max_market_cap", 100000000)
+    min_perf_ytd = data.get("min_perf_ytd", 30)
+
+    # 1. Run the TradingView query
+    res = (
         Query()
         .select(
             "name",
@@ -30,71 +48,32 @@ def run_query(min_volume, max_market_cap, min_perf_ytd):
         .order_by("volume", ascending=False)
         .limit(100)
         .set_markets("crypto")
+        .get_scanner_data()
     )
-    return query.get_scanner_data()
 
+    df = pd.DataFrame(res)
 
-def main():
-    """
-    Main Streamlit app function.
-    """
-    st.title("TradingView Screener: Crypto")
+    # 2. Convert to multi-line JSON string
+    json_str = df.to_json(orient="records", indent=2)
+    lines = json_str.splitlines()
 
-    # --- Approach 1: Using Streamlit's built-in widgets ---
-    st.header("Filter Parameters")
+    # 3. Remove lines 2–6 (1-based indexing: lines[1] through lines[5])
+    #    keep lines[:1] (line 1) and then lines[6:] (line 7 onward)
+    lines_to_keep = lines[:1] + lines[6:]
 
-    min_volume = st.number_input("Minimum Volume", value=500000, step=10000)
-    max_market_cap = st.number_input("Max Market Cap", value=100000000, step=1000000)
-    min_perf_ytd = st.number_input("Min Perf YTD (%)", value=30, step=1)
+    # 4. Remove the last 2 lines
+    lines_to_keep = lines_to_keep[:-2]
 
-    if st.button("Run Query"):
-        data = run_query(min_volume, max_market_cap, min_perf_ytd)
-        df = pd.DataFrame(data)
+    # Join the remaining lines back together
+    cleaned_json_str = "\n".join(lines_to_keep)
 
-        # Display as a table
-        st.write("### Results")
-        st.dataframe(df)
+    # 5. Convert cleaned string back to a Python object (so we return valid JSON)
+    #    - if the removal breaks JSON validity, you’ll need to adjust which lines to remove.
+    cleaned_obj = json.loads(cleaned_json_str)
 
-        # Display the JSON output
-        st.write("### JSON Output")
-        st.json(df.to_dict(orient="records"))
-
-        # Optionally allow users to download the JSON
-        json_string = df.to_json(orient="records", indent=2)
-        st.download_button(
-            label="Download JSON",
-            data=json_string,
-            file_name="tradingview_data.json",
-            mime="application/json"
-        )
-
-    # --- Approach 2: Using URL Query Params (optional) ---
-    # If you want to allow passing params via URL, e.g.:
-    #   ?min_volume=1000000&max_market_cap=50000000&min_perf_ytd=25
-    st.write("---")
-    st.header("Alternatively: Load from Query Parameters")
-
-    # Read query params
-    query_params = st.experimental_get_query_params()
-    # Provide defaults if they are not present
-    q_min_volume = int(query_params.get("min_volume", [500000])[0])
-    q_max_market_cap = int(query_params.get("max_market_cap", [100000000])[0])
-    q_min_perf_ytd = int(query_params.get("min_perf_ytd", [30])[0])
-
-    st.write(f"URL param `min_volume`: **{q_min_volume}**")
-    st.write(f"URL param `max_market_cap`: **{q_max_market_cap}**")
-    st.write(f"URL param `min_perf_ytd`: **{q_min_perf_ytd}**")
-
-    if st.button("Run Query from URL Params"):
-        data = run_query(q_min_volume, q_max_market_cap, q_min_perf_ytd)
-        df = pd.DataFrame(data)
-
-        st.write("### Results (From URL Params)")
-        st.dataframe(df)
-
-        st.write("### JSON Output")
-        st.json(df.to_dict(orient="records"))
-
+    # 6. Return as raw JSON
+    return jsonify(cleaned_obj)
 
 if __name__ == "__main__":
-    main()
+    # For local testing:
+    app.run(host="0.0.0.0", port=8000, debug=True)
