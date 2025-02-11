@@ -1,0 +1,4 @@
+appwrite
+tradingview_screener
+pandas
+python-dotenv
